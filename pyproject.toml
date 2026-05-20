@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zero-to-cad"
+version = "0.1.0"
+description = "Local Zero-To-CAD inference and inspection tool"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "cadquery>=2.7",
+    "PySide6>=6.6",
+    "vtk>=9.3",
+    "pyvista>=0.44",
+    "pyvistaqt>=0.11",
+    "pyarrow>=15",
+    "Pillow>=10",
+    "tqdm>=4.66",
+    "torch",
+    "torchvision",
+    "transformers>=4.57,<5",
+    "accelerate>=0.33",
+    "huggingface_hub>=0.24",
+    "safetensors>=0.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+zero-to-cad = "zero_to_cad.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

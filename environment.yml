@@ -1,0 +1,24 @@
+name: zero-to-cad
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - cadquery=2.7.*
+  - pyside6
+  - vtk
+  - pyvista
+  - pyvistaqt
+  - pyarrow
+  - pillow
+  - tqdm
+  - pytest
+  - pip
+  - pip:
+      - --extra-index-url https://download.pytorch.org/whl/cu128
+      - torch
+      - torchvision
+      - transformers>=4.57,<5
+      - accelerate
+      - huggingface_hub
+      - safetensors
+      - -e .
