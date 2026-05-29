@@ -27,6 +27,7 @@ from zero_to_cad.execute.drop_test import DropTestParams, build_drop_test_code
 from zero_to_cad.execute.sandbox import ExecutionResult
 from zero_to_cad.export.asset import save_asset
 from zero_to_cad.inference.model import CadModel
+from zero_to_cad.inference.prompts import build_reasoning_test_user_text
 from zero_to_cad.ui.code_panel import CodePanel
 from zero_to_cad.ui.dataset_browser import DatasetBrowser
 from zero_to_cad.ui.input_panel import InputPanel
@@ -50,6 +51,7 @@ class MainWindow(QMainWindow):
         self._model: CadModel | None = None
         self._current_uuid: str | None = None
         self._gt_stl_bytes: bytes | None = None
+        self._current_ground_truth_code: str = ""
 
         self._last_predicted_code: str | None = None
         self._last_predicted_result: ExecutionResult | None = None
@@ -118,6 +120,7 @@ class MainWindow(QMainWindow):
         self.act_load_pngs = QAction("Load 8 PNGs…", self)
         self.act_load_model = QAction("Load model", self)
         self.act_generate = QAction("Generate", self)
+        self.act_reasoning_test = QAction("Reasoning test", self)
         self.act_execute = QAction("Execute", self)
         self.act_drop_test = QAction("Drop test…", self)
         self.act_save_asset = QAction("Save asset…", self)
@@ -139,6 +142,7 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.act_load_model)
         toolbar.addSeparator()
         toolbar.addAction(self.act_generate)
+        toolbar.addAction(self.act_reasoning_test)
         toolbar.addAction(self.act_execute)
         toolbar.addAction(self.act_drop_test)
         toolbar.addSeparator()
@@ -147,6 +151,11 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.act_execute_gt)
 
         self.act_generate.setEnabled(False)
+        self.act_reasoning_test.setEnabled(False)
+        self.act_reasoning_test.setToolTip(
+            "With Cosmos-Reason loaded, generate reasoning for the selected "
+            "dataset row using its ground-truth CadQuery code."
+        )
         self.act_execute.setEnabled(False)
         self.act_drop_test.setEnabled(False)
         self.act_save_asset.setEnabled(False)
@@ -155,6 +164,7 @@ class MainWindow(QMainWindow):
         self.act_load_pngs.triggered.connect(self.input_panel._load_from_files)
         self.act_load_model.triggered.connect(self._load_model)
         self.act_generate.triggered.connect(self._generate)
+        self.act_reasoning_test.triggered.connect(self._run_reasoning_test)
         self.act_execute.triggered.connect(self._execute_predicted)
         self.act_drop_test.triggered.connect(self._run_drop_test)
         self.act_save_asset.triggered.connect(self._save_asset)
@@ -174,6 +184,11 @@ class MainWindow(QMainWindow):
         if isinstance(data, ModelEntry):
             return data
         return MODELS[0]
+
+    def _loaded_model_supports_reasoning_test(self) -> bool:
+        if self._model is None:
+            return False
+        return "cosmos-reason" in self._model.entry.id.lower()
 
     def _hf_token_present(self) -> bool:
         import os
@@ -232,6 +247,8 @@ class MainWindow(QMainWindow):
 
         self.input_panel.set_views(row.views)
         self.code_panel.set_ground_truth(row.cadquery_code)
+        self.code_panel.clear_reasoning()
+        self._current_ground_truth_code = row.cadquery_code
         self._gt_stl_bytes = row.stl_bytes
 
         try:
@@ -272,6 +289,7 @@ class MainWindow(QMainWindow):
         if self._model is not None:
             self._model.release()
             self._model = None
+            self.act_reasoning_test.setEnabled(False)
 
         self.act_load_model.setEnabled(False)
         self._set_status(f"Loading model {entry.label}…")
@@ -287,15 +305,26 @@ class MainWindow(QMainWindow):
         self.act_load_model.setEnabled(True)
         self._set_status(f"Model loaded: {model.entry.label}")
         self._update_generate_enabled()
+        self._update_reasoning_enabled()
 
     def _on_model_failed(self, error: str) -> None:
         self.act_load_model.setEnabled(True)
+        self.act_reasoning_test.setEnabled(False)
         QMessageBox.critical(self, "Model load failed", error)
         self._set_status("Model load failed")
 
     def _update_generate_enabled(self) -> None:
         ready = self._model is not None and self.input_panel.is_complete()
         self.act_generate.setEnabled(ready)
+        self._update_reasoning_enabled()
+
+    def _update_reasoning_enabled(self) -> None:
+        ready = (
+            self._loaded_model_supports_reasoning_test()
+            and self.input_panel.is_complete()
+            and bool(self._current_ground_truth_code.strip())
+        )
+        self.act_reasoning_test.setEnabled(ready)
 
     def _generate(self) -> None:
         if not self._model:
@@ -309,6 +338,7 @@ class MainWindow(QMainWindow):
             return
 
         self.act_generate.setEnabled(False)
+        self.act_reasoning_test.setEnabled(False)
         self._set_status("Generating…")
         self._generate_worker = GenerateWorker(self._model, views)
         self._generate_worker.progress.connect(self._set_status)
@@ -320,6 +350,7 @@ class MainWindow(QMainWindow):
         self.code_panel.set_predicted(code)
         self.act_execute.setEnabled(bool(code.strip()))
         self.act_generate.setEnabled(True)
+        self._update_reasoning_enabled()
         self._set_status("Generation complete.")
 
         if self._model is None:
@@ -372,8 +403,66 @@ class MainWindow(QMainWindow):
 
     def _on_generate_failed(self, error: str) -> None:
         self.act_generate.setEnabled(True)
+        self._update_reasoning_enabled()
         QMessageBox.critical(self, "Generation failed", error)
         self._set_status("Generation failed")
+
+    def _run_reasoning_test(self) -> None:
+        if not self._model:
+            QMessageBox.information(self, "Reasoning test", "Load Cosmos-Reason first.")
+            return
+        if not self._loaded_model_supports_reasoning_test():
+            QMessageBox.information(
+                self,
+                "Reasoning test",
+                "Reasoning test is intended for the Cosmos-Reason baseline model.",
+            )
+            return
+        views = self.input_panel.get_views()
+        if not views:
+            QMessageBox.information(
+                self,
+                "Reasoning test",
+                "Select a dataset row with all 8 views first.",
+            )
+            return
+        ground_truth = self._current_ground_truth_code.strip()
+        if not ground_truth:
+            QMessageBox.information(
+                self,
+                "Reasoning test",
+                "Select a dataset row with ground-truth CadQuery code first.",
+            )
+            return
+        if self._generate_worker and self._generate_worker.isRunning():
+            return
+
+        prompt = build_reasoning_test_user_text(ground_truth)
+        self.act_generate.setEnabled(False)
+        self.act_reasoning_test.setEnabled(False)
+        self._set_status("Generating reasoning test output…")
+        self._generate_worker = GenerateWorker(
+            self._model,
+            views,
+            user_text=prompt,
+            progress_text="Generating reasoning from ground truth…",
+        )
+        self._generate_worker.progress.connect(self._set_status)
+        self._generate_worker.finished_ok.connect(self._on_reasoning_done)
+        self._generate_worker.failed.connect(self._on_reasoning_failed)
+        self._generate_worker.start()
+
+    def _on_reasoning_done(self, reasoning: str) -> None:
+        self.code_panel.set_reasoning(reasoning)
+        self.act_generate.setEnabled(True)
+        self._update_reasoning_enabled()
+        self._set_status("Reasoning test complete.")
+
+    def _on_reasoning_failed(self, error: str) -> None:
+        self.act_generate.setEnabled(True)
+        self._update_reasoning_enabled()
+        QMessageBox.critical(self, "Reasoning test failed", error)
+        self._set_status("Reasoning test failed")
 
     def _execute_predicted(self) -> None:
         code = self.code_panel.get_predicted()

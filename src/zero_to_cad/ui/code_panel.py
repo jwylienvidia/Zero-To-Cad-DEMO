@@ -27,8 +27,16 @@ class CodePanel(QGroupBox):
         )
         self.ground_truth_edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
 
+        self.reasoning_edit = QPlainTextEdit()
+        self.reasoning_edit.setReadOnly(True)
+        self.reasoning_edit.setPlaceholderText(
+            "Cosmos reasoning test output will appear here…"
+        )
+        self.reasoning_edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+
         self.tabs.addTab(self.predicted_edit, "Predicted")
         self.tabs.addTab(self.ground_truth_edit, "Ground truth")
+        self.tabs.addTab(self.reasoning_edit, "Reasoning")
         layout.addWidget(self.tabs)
 
     @property
@@ -43,6 +51,10 @@ class CodePanel(QGroupBox):
     def set_ground_truth(self, code: str) -> None:
         self.ground_truth_edit.setPlainText(code)
 
+    def set_reasoning(self, reasoning: str) -> None:
+        self.reasoning_edit.setPlainText(reasoning)
+        self.tabs.setCurrentWidget(self.reasoning_edit)
+
     def get_predicted(self) -> str:
         return self.predicted_edit.toPlainText().strip()
 
@@ -51,3 +63,6 @@ class CodePanel(QGroupBox):
 
     def clear_ground_truth(self) -> None:
         self.ground_truth_edit.clear()
+
+    def clear_reasoning(self) -> None:
+        self.reasoning_edit.clear()

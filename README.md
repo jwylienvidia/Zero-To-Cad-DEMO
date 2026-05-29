@@ -10,6 +10,7 @@ Desktop application for running [ADSKAILab/Zero-To-CAD-Qwen3-VL-2B](https://hugg
 - **Sandboxed execution** — run generated code in an isolated subprocess; view STL in embedded VTK viewer
 - **Side-by-side 3D** — predicted mesh vs ground-truth mesh from dataset
 - **Drop test** — re-execute the current prediction as an N-copy grid assembly (`Drop test…` toolbar button)
+- **Reasoning test** — with Cosmos-Reason loaded, ask it to explain a selected row from the ground-truth CadQuery code
 - **Save asset** — bundle the latest prediction into a portable asset folder (STEP + STL + OBJ/MTL + textures + input views + code + manifest)
 
 ## Requirements
@@ -75,10 +76,11 @@ Every *Generate* run is logged on the **History** tab (next to Predicted / Groun
 
 3. **Browse** — select a UUID to load 8 views and ground-truth code
 4. **Generate** — toolbar → *Generate* (requires model + 8 views)
-5. **Execute** — toolbar → *Execute* to run predicted code and show the mesh
-6. **Drop test** — toolbar → *Drop test…* to re-run the prediction as N copies arranged on a grid
-7. **Save asset** — toolbar → *Save asset…* to write `<asset>/{model.step, model.stl, model.obj, model.mtl, textures/, views/, code.py, manifest.json}` for use in Blender / three.js / game engines
-8. **Export** — toolbar → *Export row…* to write a human-readable folder for one dataset sample
+5. **Reasoning test** — if Cosmos-Reason is loaded, toolbar → *Reasoning test* to generate reasoning from the selected row's ground-truth code
+6. **Execute** — toolbar → *Execute* to run predicted code and show the mesh
+7. **Drop test** — toolbar → *Drop test…* to re-run the prediction as N copies arranged on a grid
+8. **Save asset** — toolbar → *Save asset…* to write `<asset>/{model.step, model.stl, model.obj, model.mtl, textures/, views/, code.py, manifest.json}` for use in Blender / three.js / game engines
+9. **Export** — toolbar → *Export row…* to write a human-readable folder for one dataset sample
 
 ### Custom images (no dataset)
 

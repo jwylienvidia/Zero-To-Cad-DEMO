@@ -81,11 +81,14 @@ class CadModel:
         self,
         views: list[Image.Image],
         max_new_tokens: int = MAX_NEW_TOKENS,
+        *,
+        system_prompt: str | None = None,
+        user_text: str | None = None,
     ) -> str:
         messages = build_messages(
             views,
-            system_prompt=self.entry.system_prompt,
-            user_text=self.entry.user_text,
+            system_prompt=system_prompt or self.entry.system_prompt,
+            user_text=user_text or self.entry.user_text,
         )
         text = self.processor.apply_chat_template(
             messages,

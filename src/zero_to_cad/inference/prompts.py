@@ -19,6 +19,23 @@ COSMOS_REASON_SYSTEM_PROMPT = (
     "<answer>\nyour answer\n</answer>."
 )
 
+REASONING_TEST_USER_TEMPLATE = """\
+You are given 8 rendered views of a CAD object and its ground-truth CadQuery script.
+
+Ground-truth CadQuery script:
+```python
+{cadquery_code}
+```
+
+Generate concise reasoning that explains how the visible geometry maps to the
+operations and parameters in the ground-truth script. Do not rewrite the script.
+Focus on observations that would help train another model to produce this code
+from the images. This is meant for training a model that will generate python code
+from images. Provide the reasoning of the steps and order of operations involved in generating 
+the parametric model. From the training perspective, reasoning is the input and the script 
+is the output, so the reasoning should be a description of the steps and order of operations 
+involved and CAN NEVER know, infer or mention anything about the code or script. """
+
 
 def build_messages(
     views: list[Image.Image],
@@ -37,3 +54,8 @@ def build_messages(
             ],
         },
     ]
+
+
+def build_reasoning_test_user_text(cadquery_code: str) -> str:
+    """Build a Cosmos-Reason prompt using a row's ground-truth CadQuery code."""
+    return REASONING_TEST_USER_TEMPLATE.format(cadquery_code=cadquery_code.strip())

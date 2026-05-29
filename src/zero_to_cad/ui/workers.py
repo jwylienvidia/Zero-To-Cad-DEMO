@@ -60,16 +60,21 @@ class GenerateWorker(QThread):
         self,
         model: CadModel,
         views: list[Image.Image],
+        *,
+        user_text: str | None = None,
+        progress_text: str = "Generating CadQuery code…",
         parent=None,
     ) -> None:
         super().__init__(parent)
         self.model = model
         self.views = views
+        self.user_text = user_text
+        self.progress_text = progress_text
 
     def run(self) -> None:
         try:
-            self.progress.emit("Generating CadQuery code…")
-            code = self.model.generate(self.views)
+            self.progress.emit(self.progress_text)
+            code = self.model.generate(self.views, user_text=self.user_text)
             self.finished_ok.emit(code)
         except Exception as e:
             self.failed.emit(str(e))
