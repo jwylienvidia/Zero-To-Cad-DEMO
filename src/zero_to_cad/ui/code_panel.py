@@ -31,6 +31,11 @@ class CodePanel(QGroupBox):
         self.tabs.addTab(self.ground_truth_edit, "Ground truth")
         layout.addWidget(self.tabs)
 
+    @property
+    def tab_widget(self) -> QTabWidget:
+        """Expose tabs so callers can add extra panels (e.g. run history)."""
+        return self.tabs
+
     def set_predicted(self, code: str) -> None:
         self.predicted_edit.setPlainText(code)
         self.tabs.setCurrentIndex(0)

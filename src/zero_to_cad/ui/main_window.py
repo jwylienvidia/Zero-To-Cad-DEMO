@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 
-from PIL import Image
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QComboBox,
     QFileDialog,
     QHBoxLayout,
+    QInputDialog,
     QMainWindow,
     QMessageBox,
     QSplitter,
@@ -20,15 +20,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from zero_to_cad.config import MODEL_ID, exports_dir
+from zero_to_cad.config import MODELS, ModelEntry, VIEWER_BACKEND, assets_dir, exports_dir
 from zero_to_cad.dataset.downloader import is_test_split_downloaded
 from zero_to_cad.dataset.parquet_store import ParquetStore
+from zero_to_cad.execute.drop_test import DropTestParams, build_drop_test_code
 from zero_to_cad.execute.sandbox import ExecutionResult
+from zero_to_cad.export.asset import save_asset
 from zero_to_cad.inference.model import CadModel
 from zero_to_cad.ui.code_panel import CodePanel
 from zero_to_cad.ui.dataset_browser import DatasetBrowser
 from zero_to_cad.ui.input_panel import InputPanel
-from zero_to_cad.config import VIEWER_BACKEND
+from zero_to_cad.ui.run_history import RunHistoryPanel, new_run_record
 from zero_to_cad.ui.viewer_3d import create_viewer
 from zero_to_cad.ui.workers import (
     DownloadWorker,
@@ -48,6 +50,10 @@ class MainWindow(QMainWindow):
         self._model: CadModel | None = None
         self._current_uuid: str | None = None
         self._gt_stl_bytes: bytes | None = None
+
+        self._last_predicted_code: str | None = None
+        self._last_predicted_result: ExecutionResult | None = None
+        self._current_run_id: str | None = None
 
         self._download_worker: DownloadWorker | None = None
         self._model_worker: LoadModelWorker | None = None
@@ -80,6 +86,10 @@ class MainWindow(QMainWindow):
         center_split.addWidget(self.code_panel)
         center_split.setStretchFactor(0, 2)
         center_split.setStretchFactor(1, 3)
+
+        self.run_history = RunHistoryPanel()
+        self.code_panel.tab_widget.addTab(self.run_history, "History")
+
         main_split.addWidget(center_split)
 
         viewer_split = QSplitter(Qt.Orientation.Vertical)
@@ -107,31 +117,47 @@ class MainWindow(QMainWindow):
 
         self.act_load_pngs = QAction("Load 8 PNGs…", self)
         self.act_load_model = QAction("Load model", self)
-        self.act_reload_model = QAction("Reload model", self)
         self.act_generate = QAction("Generate", self)
         self.act_execute = QAction("Execute", self)
+        self.act_drop_test = QAction("Drop test…", self)
+        self.act_save_asset = QAction("Save asset…", self)
         self.act_export = QAction("Export row…", self)
         self.act_execute_gt = QAction("View GT mesh", self)
 
         toolbar.addAction(self.act_load_pngs)
+
+        self.model_combo = QComboBox()
+        for entry in MODELS:
+            self.model_combo.addItem(entry.label, entry)
+            idx = self.model_combo.count() - 1
+            if entry.notes:
+                self.model_combo.setItemData(
+                    idx, entry.notes, Qt.ItemDataRole.ToolTipRole
+                )
+        toolbar.addWidget(self.model_combo)
+
         toolbar.addAction(self.act_load_model)
-        toolbar.addAction(self.act_reload_model)
         toolbar.addSeparator()
         toolbar.addAction(self.act_generate)
         toolbar.addAction(self.act_execute)
+        toolbar.addAction(self.act_drop_test)
         toolbar.addSeparator()
+        toolbar.addAction(self.act_save_asset)
         toolbar.addAction(self.act_export)
         toolbar.addAction(self.act_execute_gt)
 
         self.act_generate.setEnabled(False)
         self.act_execute.setEnabled(False)
+        self.act_drop_test.setEnabled(False)
+        self.act_save_asset.setEnabled(False)
 
     def _connect_signals(self) -> None:
         self.act_load_pngs.triggered.connect(self.input_panel._load_from_files)
         self.act_load_model.triggered.connect(self._load_model)
-        self.act_reload_model.triggered.connect(self._load_model)
         self.act_generate.triggered.connect(self._generate)
         self.act_execute.triggered.connect(self._execute_predicted)
+        self.act_drop_test.triggered.connect(self._run_drop_test)
+        self.act_save_asset.triggered.connect(self._save_asset)
         self.act_export.triggered.connect(self._export_row)
         self.act_execute_gt.triggered.connect(self._view_gt_mesh)
 
@@ -140,6 +166,26 @@ class MainWindow(QMainWindow):
         self.dataset_browser.row_selected.connect(self._on_row_selected)
 
         self.input_panel.views_changed.connect(self._update_generate_enabled)
+
+        self.run_history.record_selected.connect(self._on_history_selected)
+
+    def _selected_model_entry(self) -> ModelEntry:
+        data = self.model_combo.currentData()
+        if isinstance(data, ModelEntry):
+            return data
+        return MODELS[0]
+
+    def _hf_token_present(self) -> bool:
+        import os
+
+        if os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN"):
+            return True
+        try:
+            from huggingface_hub import HfFolder
+
+            return bool(HfFolder.get_token())
+        except Exception:
+            return False
 
     def _set_status(self, message: str) -> None:
         self.statusBar().showMessage(message)
@@ -211,11 +257,26 @@ class MainWindow(QMainWindow):
     def _load_model(self) -> None:
         if self._model_worker and self._model_worker.isRunning():
             return
-        self.act_load_model.setEnabled(False)
-        self.act_reload_model.setEnabled(False)
-        self._set_status(f"Loading model {MODEL_ID}…")
 
-        self._model_worker = LoadModelWorker(MODEL_ID)
+        entry = self._selected_model_entry()
+        if entry.gated and not self._hf_token_present():
+            QMessageBox.warning(
+                self,
+                "Gated model",
+                f"{entry.label} requires Hugging Face authentication.\n\n"
+                f"Run `huggingface-cli login` and accept the model gate at:\n"
+                f"https://huggingface.co/{entry.id}\n\n"
+                f"{entry.notes}",
+            )
+
+        if self._model is not None:
+            self._model.release()
+            self._model = None
+
+        self.act_load_model.setEnabled(False)
+        self._set_status(f"Loading model {entry.label}…")
+
+        self._model_worker = LoadModelWorker(entry)
         self._model_worker.progress.connect(self._set_status)
         self._model_worker.finished_ok.connect(self._on_model_loaded)
         self._model_worker.failed.connect(self._on_model_failed)
@@ -224,13 +285,11 @@ class MainWindow(QMainWindow):
     def _on_model_loaded(self, model: CadModel) -> None:
         self._model = model
         self.act_load_model.setEnabled(True)
-        self.act_reload_model.setEnabled(True)
-        self._set_status("Model loaded.")
+        self._set_status(f"Model loaded: {model.entry.label}")
         self._update_generate_enabled()
 
     def _on_model_failed(self, error: str) -> None:
         self.act_load_model.setEnabled(True)
-        self.act_reload_model.setEnabled(True)
         QMessageBox.critical(self, "Model load failed", error)
         self._set_status("Model load failed")
 
@@ -263,6 +322,54 @@ class MainWindow(QMainWindow):
         self.act_generate.setEnabled(True)
         self._set_status("Generation complete.")
 
+        if self._model is None:
+            return
+        views = self.input_panel.get_views()
+        source = self._current_uuid or "custom"
+        rec = new_run_record(
+            model_id=self._model.entry.id,
+            model_label=self._model.entry.label,
+            source=source,
+            code=code,
+            views=views or [],
+        )
+        self._current_run_id = rec.run_id
+        self.run_history.add_run(rec)
+
+    def _on_history_selected(self, rec: object) -> None:
+        from zero_to_cad.ui.run_history import RunRecord
+
+        if not isinstance(rec, RunRecord):
+            return
+
+        self._current_run_id = rec.run_id
+        self.code_panel.set_predicted(rec.code)
+        self._last_predicted_code = rec.code
+        self._last_predicted_result = rec.result
+
+        if rec.views:
+            self.input_panel.set_views(rec.views)
+
+        mesh_path = None
+        if rec.result:
+            if rec.result.stl_path and rec.result.stl_path.exists():
+                mesh_path = rec.result.stl_path
+            elif rec.result.step_path and rec.result.step_path.exists():
+                mesh_path = rec.result.step_path
+
+        if mesh_path:
+            try:
+                self.viewer_predicted.load_mesh(mesh_path)
+            except Exception as e:
+                self._set_status(f"History mesh load failed: {e}")
+        else:
+            self.viewer_predicted.clear()
+
+        self.act_execute.setEnabled(bool(rec.code.strip()))
+        self.act_drop_test.setEnabled(rec.result is not None and rec.result.ok)
+        self.act_save_asset.setEnabled(rec.result is not None and rec.result.ok)
+        self._set_status(f"Restored run {rec.run_id} ({rec.model_label})")
+
     def _on_generate_failed(self, error: str) -> None:
         self.act_generate.setEnabled(True)
         QMessageBox.critical(self, "Generation failed", error)
@@ -275,20 +382,29 @@ class MainWindow(QMainWindow):
             return
         self._run_execute(code, target="predicted")
 
-    def _run_execute(self, code: str, target: str = "predicted") -> None:
+    def _run_execute(
+        self, code: str, target: str = "predicted", *, label: str = "Execution"
+    ) -> None:
         if self._execute_worker and self._execute_worker.isRunning():
             return
         self.act_execute.setEnabled(False)
-        self._set_status("Executing CadQuery…")
+        self.act_drop_test.setEnabled(False)
+        self._set_status(f"{label}: running CadQuery…")
         self._execute_worker = ExecuteWorker(code)
         self._execute_worker.progress.connect(self._set_status)
         self._execute_worker.finished_ok.connect(
-            lambda r: self._on_execute_done(r, target)
+            lambda r: self._on_execute_done(r, target, code, label)
         )
         self._execute_worker.failed.connect(self._on_execute_failed)
         self._execute_worker.start()
 
-    def _on_execute_done(self, result: ExecutionResult, target: str) -> None:
+    def _on_execute_done(
+        self,
+        result: ExecutionResult,
+        target: str,
+        code: str,
+        label: str = "Execution",
+    ) -> None:
         self.act_execute.setEnabled(True)
         viewer = (
             self.viewer_predicted if target == "predicted" else self.viewer_ground_truth
@@ -298,10 +414,19 @@ class MainWindow(QMainWindow):
             mesh_path = result.stl_path
         elif result.step_path and result.step_path.exists():
             mesh_path = result.step_path
+
+        if target == "predicted":
+            self._last_predicted_code = code
+            self._last_predicted_result = result
+            self.act_drop_test.setEnabled(bool(mesh_path))
+            self.act_save_asset.setEnabled(bool(mesh_path))
+            if self._current_run_id:
+                self.run_history.update_run(self._current_run_id, result)
+
         if mesh_path:
             try:
                 viewer.load_mesh(mesh_path)
-                self._set_status(f"Execution OK — {mesh_path}")
+                self._set_status(f"{label} OK — {mesh_path}")
             except Exception as e:
                 QMessageBox.warning(
                     self,
@@ -309,12 +434,84 @@ class MainWindow(QMainWindow):
                     f"Mesh saved but viewer failed to load:\n{e}\n\nFile: {mesh_path}",
                 )
         else:
-            self._set_status("Execution OK but no mesh file produced.")
+            self._set_status(f"{label} OK but no mesh file produced.")
 
     def _on_execute_failed(self, error: str) -> None:
         self.act_execute.setEnabled(True)
+        self.act_drop_test.setEnabled(self._last_predicted_result is not None)
         QMessageBox.critical(self, "Execution failed", error)
         self._set_status("Execution failed")
+
+    def _run_drop_test(self) -> None:
+        code = self._last_predicted_code or self.code_panel.get_predicted()
+        if not code:
+            QMessageBox.information(
+                self,
+                "Drop test",
+                "Execute a prediction first — drop test needs a successfully "
+                "executed CadQuery script.",
+            )
+            return
+        count, accepted = QInputDialog.getInt(
+            self, "Drop test", "Number of copies:", 8, 1, 200, 1
+        )
+        if not accepted:
+            return
+        try:
+            drop_code = build_drop_test_code(code, DropTestParams(count=count))
+        except Exception as e:
+            QMessageBox.critical(self, "Drop test", f"Failed to build script:\n{e}")
+            return
+        self.code_panel.set_predicted(drop_code)
+        self._run_execute(drop_code, target="predicted", label=f"Drop test x{count}")
+
+    def _save_asset(self) -> None:
+        result = self._last_predicted_result
+        if result is None or not result.ok:
+            QMessageBox.information(
+                self,
+                "Save asset",
+                "Execute a prediction first — saving needs a successful run.",
+            )
+            return
+
+        default_dir = assets_dir()
+        default_dir.mkdir(parents=True, exist_ok=True)
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Choose asset folder location", str(default_dir)
+        )
+        if not chosen:
+            return
+
+        suggested_name, accepted = QInputDialog.getText(
+            self, "Save asset", "Asset name (subfolder):", text="prediction"
+        )
+        if not accepted or not suggested_name.strip():
+            return
+        out_dir = Path(chosen) / suggested_name.strip()
+
+        views = self.input_panel.get_views()
+        try:
+            paths = save_asset(
+                out_dir,
+                name="model",
+                code=self._last_predicted_code,
+                step_path=result.step_path,
+                stl_path=result.stl_path,
+                views=views,
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Save asset failed", str(e))
+            return
+
+        self._set_status(f"Asset saved to {paths.asset_dir}")
+        QMessageBox.information(
+            self,
+            "Save asset",
+            f"Asset folder written:\n{paths.asset_dir}\n\n"
+            "Contains STEP, STL, OBJ + MTL, textures/ (albedo + view PNGs), "
+            "views/, code.py and manifest.json.",
+        )
 
     def _view_gt_mesh(self) -> None:
         if self._gt_stl_bytes:

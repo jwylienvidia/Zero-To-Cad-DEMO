@@ -9,6 +9,7 @@ from PySide6.QtCore import QThread, Signal
 
 from zero_to_cad.dataset.downloader import download_test_split
 from zero_to_cad.execute.sandbox import ExecutionResult, execute_cadquery
+from zero_to_cad.config import ModelEntry
 from zero_to_cad.inference.model import CadModel
 
 
@@ -35,14 +36,16 @@ class LoadModelWorker(QThread):
     failed = Signal(str)
     progress = Signal(str)
 
-    def __init__(self, model_id: str, parent=None) -> None:
+    def __init__(self, entry: ModelEntry, parent=None) -> None:
         super().__init__(parent)
-        self.model_id = model_id
+        self.entry = entry
 
     def run(self) -> None:
         try:
-            self.progress.emit("Loading processor and model (first run downloads ~4 GB)…")
-            model = CadModel(model_id=self.model_id)
+            self.progress.emit(
+                f"Loading {self.entry.label} (first run downloads weights)…"
+            )
+            model = CadModel(entry=self.entry)
             self.finished_ok.emit(model)
         except Exception as e:
             self.failed.emit(str(e))
