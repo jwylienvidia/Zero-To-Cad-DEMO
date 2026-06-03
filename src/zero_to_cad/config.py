@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from zero_to_cad.inference.prompts import (
+    COSMOS_DOCS_SYSTEM_PROMPT,
     COSMOS_REASON_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
     USER_TEXT,
@@ -51,6 +52,20 @@ MODELS: list[ModelEntry] = [
         ),
         gated=True,
         notes="Needs `huggingface-cli login` + model gate; requires ~32 GB GPU memory.",
+    ),
+    ModelEntry(
+        id="nvidia/Cosmos-Reason2-8B",
+        label="Cosmos-Reason2 8B + CadQuery docs (baseline, gated)",
+        system_prompt=COSMOS_DOCS_SYSTEM_PROMPT,
+        user_text=(
+            "From these 8 views, write a complete CadQuery Python script "
+            "that defines a variable `result`."
+        ),
+        gated=True,
+        notes=(
+            "Baseline Cosmos with condensed CadQuery docs in the prompt. "
+            "Same gate/GPU needs as Cosmos-Reason2 8B."
+        ),
     ),
 ]
 

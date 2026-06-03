@@ -58,6 +58,7 @@ The toolbar combo box lists every model in the hardcoded registry ([`src/zero_to
 |-------|-------|
 | **Zero-To-CAD 2B** | CadQuery fine-tune; ~4 GB download; fits most CUDA GPUs |
 | **Cosmos-Reason2 8B** | Qwen3-VL baseline (not CAD-trained); gated; ~32 GB GPU memory |
+| **Cosmos-Reason2 8B + CadQuery docs** | Same baseline with condensed CadQuery API reference in the system prompt; gated; ~32 GB GPU memory |
 
 Only one model is loaded at a time. Selecting a different entry and clicking *Load model* releases the previous weights from VRAM before loading the new one.
 

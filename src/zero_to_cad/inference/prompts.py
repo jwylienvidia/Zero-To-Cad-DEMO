@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from PIL import Image
 
+from zero_to_cad.inference.cadquery_reference import CADQUERY_REFERENCE
+
 SYSTEM_PROMPT = (
     "You are a CAD code assistant. Given multiple rendered views of a 3D shape, "
     "generate clean, well-structured CadQuery Python code that accurately "
@@ -18,6 +20,18 @@ COSMOS_REASON_SYSTEM_PROMPT = (
     "<think>\nyour reasoning\n</think>\n\n"
     "<answer>\nyour answer\n</answer>."
 )
+
+
+def build_doc_augmented_system_prompt(base_system_prompt: str) -> str:
+    """Append the condensed CadQuery reference to a base system prompt."""
+    return (
+        f"{base_system_prompt}\n\n"
+        "Use the following condensed CadQuery reference to write correct code:\n\n"
+        f"{CADQUERY_REFERENCE}"
+    )
+
+
+COSMOS_DOCS_SYSTEM_PROMPT = build_doc_augmented_system_prompt(COSMOS_REASON_SYSTEM_PROMPT)
 
 REASONING_TEST_USER_TEMPLATE = """\
 You are given 8 rendered views of a CAD object and its ground-truth CadQuery script.
