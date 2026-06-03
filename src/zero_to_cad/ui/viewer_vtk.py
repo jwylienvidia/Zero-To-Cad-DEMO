@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 from pyvistaqt import QtInteractor
 
 from zero_to_cad.ui.mesh_loader import load_mesh_bytes, load_mesh_path
+from zero_to_cad.ui.viewer_render import prepare_mesh_for_display
 
 _MESH_COLOR = "lightsteelblue"
 
@@ -125,7 +126,7 @@ class VtkViewer3D(QWidget):
         self.load_mesh(path)
 
     def _display_mesh(self, mesh) -> None:
-        self._mesh = mesh
+        self._mesh = prepare_mesh_for_display(mesh)
         self._redraw_mesh()
 
     def _redraw_mesh(self) -> None:
@@ -138,6 +139,10 @@ class VtkViewer3D(QWidget):
             show_edges=self._show_edges,
             color=_MESH_COLOR,
             smooth_shading=True,
+            specular=0.25,
+            specular_power=15,
+            ambient=0.2,
+            diffuse=0.8,
         )
         self.plotter.reset_camera()
         self.plotter.view_isometric()
