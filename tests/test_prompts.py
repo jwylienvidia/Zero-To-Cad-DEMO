@@ -52,6 +52,9 @@ def test_cadquery_reference_is_non_empty() -> None:
     assert CADQUERY_REFERENCE.strip()
     assert "import cadquery as cq" in CADQUERY_REFERENCE
     assert "result" in CADQUERY_REFERENCE
+    assert "mirrorX" in CADQUERY_REFERENCE
+    assert ".sketch()" in CADQUERY_REFERENCE
+    assert "sweep" in CADQUERY_REFERENCE
 
 
 def test_cosmos_docs_system_prompt_includes_reference() -> None:
