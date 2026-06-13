@@ -48,6 +48,8 @@ class ModelEntry:
     hf_overrides: dict | None = None
     # Base URL for the "openai" remote backend (OpenAI-compatible vLLM server).
     base_url: str | None = None
+    # Whether this model supports the Refine self-critique workflow.
+    is_reasoning: bool = False
 
 
 MODELS: list[ModelEntry] = [
@@ -65,6 +67,7 @@ MODELS: list[ModelEntry] = [
         user_text=_COSMOS_USER_TEXT,
         backend="vllm",
         gated=True,
+        is_reasoning=True,
         notes=(
             "Baseline Cosmos-Reason2 with condensed CadQuery docs in the prompt. "
             "Needs `huggingface-cli login` + model gate; requires ~32 GB GPU memory."
@@ -79,6 +82,7 @@ MODELS: list[ModelEntry] = [
         system_prompt=COSMOS_DOCS_SYSTEM_PROMPT,
         user_text=_COSMOS_USER_TEXT,
         backend="vllm",
+        is_reasoning=True,
         notes=(
             "Local Cosmos3 8B reasoning fine-tune. Override the weights path with "
             "the COSMOS3_MODEL env var."
@@ -91,6 +95,7 @@ MODELS: list[ModelEntry] = [
         user_text=_COSMOS_USER_TEXT,
         backend="openai",
         gated=True,
+        is_reasoning=True,
         base_url=os.environ.get("COSMOS3_NANO_BASE_URL", "http://localhost:8000/v1"),
         notes=(
             "Cosmos3-Nano baseline served by a separate Cosmos3-capable vLLM "
@@ -105,7 +110,15 @@ MODELS: list[ModelEntry] = [
         system_prompt=CADQUERY_DOCS_SYSTEM_PROMPT,
         user_text=USER_TEXT,
         backend="anthropic",
-        notes="Anthropic API model. Set ANTHROPIC_API_KEY; override id with CLAUDE_FABLE_MODEL.",
+        notes="Anthropic API model. Set ANTHROPIC_API_KEY (Settings); override id with CLAUDE_FABLE_MODEL.",
+    ),
+    ModelEntry(
+        id=os.environ.get("GEMINI_MODEL", "gemini-2.5-pro"),
+        label="Gemini 2.5 Pro (API)",
+        system_prompt=CADQUERY_DOCS_SYSTEM_PROMPT,
+        user_text=USER_TEXT,
+        backend="gemini",
+        notes="Google Gemini API model. Set GEMINI_API_KEY (Settings); override id with GEMINI_MODEL.",
     ),
 ]
 

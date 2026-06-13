@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+from PIL import Image
 
 
 @dataclass
@@ -107,3 +108,29 @@ def render_mesh_to_array(
         return np.asarray(plotter.screenshot(return_img=True))
     finally:
         plotter.close()
+
+
+DEFAULT_REFINE_CAMERAS = [
+    CameraState(azimuth=45.0, elevation=30.0),
+    CameraState(azimuth=135.0, elevation=30.0),
+    CameraState(azimuth=225.0, elevation=30.0),
+    CameraState(azimuth=315.0, elevation=30.0),
+]
+
+
+def render_mesh_views(
+    mesh,
+    *,
+    cameras: list[CameraState] | None = None,
+    window_size: tuple[int, int] = (512, 512),
+) -> list[Image.Image]:
+    """Render a mesh from multiple camera angles and return PIL images."""
+    views: list[Image.Image] = []
+    for camera in cameras or DEFAULT_REFINE_CAMERAS:
+        array = render_mesh_to_array(
+            mesh,
+            camera=camera,
+            window_size=window_size,
+        )
+        views.append(Image.fromarray(array))
+    return views

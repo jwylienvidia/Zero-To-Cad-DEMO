@@ -19,7 +19,7 @@ Desktop application for running [ADSKAILab/Zero-To-CAD-Qwen3-VL-2B](https://hugg
 - NVIDIA GPU with CUDA 12.x for the local (vLLM) models
 - ~8 GB disk for test parquet + model weights (Hugging Face cache)
 - Python 3.12 (CadQuery wheels do not support 3.13+)
-- `ANTHROPIC_API_KEY` only if you use the Claude Fable model
+- An API key only if you use a hosted model: `ANTHROPIC_API_KEY` (Claude Fable) or `GEMINI_API_KEY` (Gemini). Set these in the in-app **Settings…** dialog (stored in a gitignored `settings.json`) or as environment variables.
 
 ## Install
 
@@ -51,13 +51,25 @@ pip install vllm
 is env-overridable: `VLLM_MAX_MODEL_LEN` (default `8192`) and
 `VLLM_GPU_MEMORY_UTILIZATION` (default `0.9`).
 
-### Claude Fable (API)
+### Hosted models (API keys)
 
-The Claude Fable model is a cloud API call — no local weights. Set your key:
+Claude Fable and Gemini are cloud API calls — no local weights. Provide the
+relevant key in one of two ways:
+
+- **Settings… dialog** (recommended): toolbar → *Settings…* → enter your key.
+  Values are saved to `settings.json` at the repo root, which is gitignored so
+  secrets are never committed. The file is created with `0600` permissions.
+- **Environment variables**: `ANTHROPIC_API_KEY` (Claude) and `GEMINI_API_KEY`
+  (Gemini). Environment variables take precedence over `settings.json`.
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
+export GEMINI_API_KEY=...
 ```
+
+Other endpoints (`COSMOS3_NANO_BASE_URL`, `VLLM_REMOTE_BASE_URL`) can also be
+set from the Settings… dialog. Override the path/location with the
+`ZERO_TO_CAD_SETTINGS` environment variable.
 
 ## Run
 
@@ -84,6 +96,7 @@ The toolbar combo box lists every model in the hardcoded registry ([`src/zero_to
 | **Cosmos3 8B (Zero-To-CAD reasoning fine-tune)** | vLLM | Local reasoning fine-tune; override path with `COSMOS3_MODEL` |
 | **Cosmos3-Nano + CadQuery docs** | Remote vLLM (OpenAI API) | `cosmos3_omni` architecture that stock in-process vLLM can't load; served by a separate Cosmos3-capable vLLM server. Set `COSMOS3_NANO_BASE_URL`. |
 | **Claude Fable 5** | Anthropic API | Cloud model; needs `ANTHROPIC_API_KEY`; override id with `CLAUDE_FABLE_MODEL` |
+| **Gemini 2.5 Pro** | Google Gemini API | Cloud model; needs `GEMINI_API_KEY`; override id with `GEMINI_MODEL` |
 
 Only one model is loaded at a time. Selecting a different entry and clicking *Load model* releases the previous weights from VRAM before loading the new one.
 
@@ -92,7 +105,7 @@ Gated baselines (Cosmos-Reason2-8B, Cosmos3-Nano) require Hugging Face authentic
 1. Accept the model gate (e.g. [nvidia/Cosmos-Reason2-8B](https://huggingface.co/nvidia/Cosmos-Reason2-8B))
 2. Run `huggingface-cli login`
 
-The Claude Fable model is an API call — set `ANTHROPIC_API_KEY` in your environment before loading it.
+The Claude Fable and Gemini models are API calls — set `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` via the **Settings…** dialog (or your environment) before loading them.
 
 **Cosmos3-Nano** uses NVIDIA's `cosmos3_omni` architecture, which stock in-process vLLM cannot load. Run it on a separate Cosmos3-capable vLLM server and point the app at it. For example:
 
@@ -108,7 +121,7 @@ docker run --runtime nvidia --gpus all \
 
 Then set `COSMOS3_NANO_BASE_URL` (default `http://localhost:8000/v1`) before launching the app. "Load model" verifies the server is reachable.
 
-Each model uses its own system/user prompt and `backend` (also defined in `config.MODELS`). To add another model, append a `ModelEntry` with its id, label, prompts, and backend (`vllm` or `anthropic`).
+Each model uses its own system/user prompt and `backend` (also defined in `config.MODELS`). To add another model, append a `ModelEntry` with its id, label, prompts, and backend (`vllm`, `openai`, `anthropic`, or `gemini`).
 
 ### Run history
 
@@ -134,7 +147,7 @@ Every *Generate* run is logged on the **History** tab (next to Predicted / Groun
 ```
 src/zero_to_cad/
   dataset/     # parquet download + lazy index
-  inference/   # vLLM + Anthropic backends, factory, prompts
+  inference/   # vLLM, Anthropic, Gemini, remote backends, factory, prompts
   execute/     # CadQuery subprocess sandbox
   ui/          # PySide6 GUI
 tests/

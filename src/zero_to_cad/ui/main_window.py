@@ -31,6 +31,12 @@ from zero_to_cad.inference.prompts import (
     build_reasoning_test_user_text,
     extract_cadquery_code,
     extract_reasoning,
+    extract_refine_code,
+    format_refine_display,
+    looks_like_cadquery_code,
+    parse_refine_output,
+    refine_code_is_truncated,
+    refine_code_unchanged,
 )
 from zero_to_cad.ui.code_panel import CodePanel
 from zero_to_cad.ui.dataset_browser import DatasetBrowser
@@ -42,6 +48,7 @@ from zero_to_cad.ui.workers import (
     ExecuteWorker,
     GenerateWorker,
     LoadModelWorker,
+    RefineWorker,
 )
 
 
@@ -59,11 +66,13 @@ class MainWindow(QMainWindow):
 
         self._last_predicted_code: str | None = None
         self._last_predicted_result: ExecutionResult | None = None
+        self._refine_input_code: str = ""
         self._current_run_id: str | None = None
 
         self._download_worker: DownloadWorker | None = None
         self._model_worker: LoadModelWorker | None = None
         self._generate_worker: GenerateWorker | None = None
+        self._refine_worker: RefineWorker | None = None
         self._execute_worker: ExecuteWorker | None = None
 
         self._build_ui()
@@ -125,11 +134,13 @@ class MainWindow(QMainWindow):
         self.act_load_model = QAction("Load model", self)
         self.act_generate = QAction("Generate", self)
         self.act_reasoning_test = QAction("Reasoning test", self)
+        self.act_refine = QAction("Refine (WIP)", self)
         self.act_execute = QAction("Execute", self)
         self.act_drop_test = QAction("Drop test…", self)
         self.act_save_asset = QAction("Save asset…", self)
         self.act_export = QAction("Export row…", self)
         self.act_execute_gt = QAction("View GT mesh", self)
+        self.act_settings = QAction("Settings…", self)
 
         toolbar.addAction(self.act_load_pngs)
 
@@ -146,6 +157,7 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.act_load_model)
         toolbar.addSeparator()
         toolbar.addAction(self.act_generate)
+        toolbar.addAction(self.act_refine)
         toolbar.addAction(self.act_reasoning_test)
         toolbar.addAction(self.act_execute)
         toolbar.addAction(self.act_drop_test)
@@ -153,9 +165,17 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.act_save_asset)
         toolbar.addAction(self.act_export)
         toolbar.addAction(self.act_execute_gt)
+        toolbar.addSeparator()
+        toolbar.addAction(self.act_settings)
 
         self.act_generate.setEnabled(False)
         self.act_reasoning_test.setEnabled(False)
+        self.act_refine.setEnabled(False)
+        self.act_refine.setToolTip(
+            "Fix script errors or critique the generated model against the target "
+            "views and produce an improved script. Uses whichever model is loaded — "
+            "switch the model combo and Load model to refine with a different model."
+        )
         self.act_reasoning_test.setToolTip(
             "With Cosmos-Reason loaded, generate reasoning for the selected "
             "dataset row using its ground-truth CadQuery code."
@@ -169,11 +189,13 @@ class MainWindow(QMainWindow):
         self.act_load_model.triggered.connect(self._load_model)
         self.act_generate.triggered.connect(self._generate)
         self.act_reasoning_test.triggered.connect(self._run_reasoning_test)
+        self.act_refine.triggered.connect(self._refine)
         self.act_execute.triggered.connect(self._execute_predicted)
         self.act_drop_test.triggered.connect(self._run_drop_test)
         self.act_save_asset.triggered.connect(self._save_asset)
         self.act_export.triggered.connect(self._export_row)
         self.act_execute_gt.triggered.connect(self._view_gt_mesh)
+        self.act_settings.triggered.connect(self._open_settings)
 
         self.dataset_browser.download_requested.connect(self._download_dataset)
         self.dataset_browser.refresh_requested.connect(self._refresh_dataset_index)
@@ -210,6 +232,18 @@ class MainWindow(QMainWindow):
         import os
 
         return bool(os.environ.get("ANTHROPIC_API_KEY"))
+
+    def _gemini_key_present(self) -> bool:
+        import os
+
+        return bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
+
+    def _open_settings(self) -> None:
+        from zero_to_cad.ui.settings_dialog import SettingsDialog
+
+        dialog = SettingsDialog(self)
+        if dialog.exec():
+            self._set_status("Settings saved.")
 
     def _set_status(self, message: str) -> None:
         self.statusBar().showMessage(message)
@@ -289,7 +323,16 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "Anthropic API key missing",
-                f"{entry.label} requires the ANTHROPIC_API_KEY environment variable.\n\n"
+                f"{entry.label} requires an ANTHROPIC_API_KEY.\n\n"
+                "Add it via the Settings… dialog (or set the environment variable).\n\n"
+                f"{entry.notes}",
+            )
+        elif entry.backend == "gemini" and not self._gemini_key_present():
+            QMessageBox.warning(
+                self,
+                "Gemini API key missing",
+                f"{entry.label} requires a GEMINI_API_KEY.\n\n"
+                "Add it via the Settings… dialog (or set the environment variable).\n\n"
                 f"{entry.notes}",
             )
         elif entry.backend == "vllm" and entry.gated and not self._hf_token_present():
@@ -306,6 +349,7 @@ class MainWindow(QMainWindow):
             self._model.release()
             self._model = None
             self.act_reasoning_test.setEnabled(False)
+            self.act_refine.setEnabled(False)
 
         self.act_load_model.setEnabled(False)
         self._set_status(f"Loading model {entry.label}…")
@@ -322,10 +366,12 @@ class MainWindow(QMainWindow):
         self._set_status(f"Model loaded: {model.entry.label}")
         self._update_generate_enabled()
         self._update_reasoning_enabled()
+        self._update_refine_enabled()
 
     def _on_model_failed(self, error: str) -> None:
         self.act_load_model.setEnabled(True)
         self.act_reasoning_test.setEnabled(False)
+        self.act_refine.setEnabled(False)
         QMessageBox.critical(self, "Model load failed", error)
         self._set_status("Model load failed")
 
@@ -333,6 +379,7 @@ class MainWindow(QMainWindow):
         ready = self._model is not None and self.input_panel.is_complete()
         self.act_generate.setEnabled(ready)
         self._update_reasoning_enabled()
+        self._update_refine_enabled()
 
     def _update_reasoning_enabled(self) -> None:
         ready = (
@@ -341,6 +388,13 @@ class MainWindow(QMainWindow):
             and bool(self._current_ground_truth_code.strip())
         )
         self.act_reasoning_test.setEnabled(ready)
+
+    def _update_refine_enabled(self) -> None:
+        ready = (
+            self._model is not None
+            and bool(self.code_panel.get_predicted().strip())
+        )
+        self.act_refine.setEnabled(ready)
 
     def _generate(self) -> None:
         if not self._model:
@@ -355,6 +409,7 @@ class MainWindow(QMainWindow):
 
         self.act_generate.setEnabled(False)
         self.act_reasoning_test.setEnabled(False)
+        self.act_refine.setEnabled(False)
         self._set_status("Generating…")
         self._generate_worker = GenerateWorker(self._model, views)
         self._generate_worker.progress.connect(self._set_status)
@@ -374,6 +429,7 @@ class MainWindow(QMainWindow):
         self.act_execute.setEnabled(bool(code.strip()))
         self.act_generate.setEnabled(True)
         self._update_reasoning_enabled()
+        self._update_refine_enabled()
         self._set_status("Generation complete.")
 
         if self._model is None:
@@ -422,11 +478,13 @@ class MainWindow(QMainWindow):
         self.act_execute.setEnabled(bool(rec.code.strip()))
         self.act_drop_test.setEnabled(rec.result is not None and rec.result.ok)
         self.act_save_asset.setEnabled(rec.result is not None and rec.result.ok)
+        self._update_refine_enabled()
         self._set_status(f"Restored run {rec.run_id} ({rec.model_label})")
 
     def _on_generate_failed(self, error: str) -> None:
         self.act_generate.setEnabled(True)
         self._update_reasoning_enabled()
+        self._update_refine_enabled()
         QMessageBox.critical(self, "Generation failed", error)
         self._set_status("Generation failed")
 
@@ -463,6 +521,7 @@ class MainWindow(QMainWindow):
         prompt = build_reasoning_test_user_text(ground_truth)
         self.act_generate.setEnabled(False)
         self.act_reasoning_test.setEnabled(False)
+        self.act_refine.setEnabled(False)
         self._set_status("Generating reasoning test output…")
         self._generate_worker = GenerateWorker(
             self._model,
@@ -479,13 +538,124 @@ class MainWindow(QMainWindow):
         self.code_panel.set_reasoning(reasoning)
         self.act_generate.setEnabled(True)
         self._update_reasoning_enabled()
+        self._update_refine_enabled()
         self._set_status("Reasoning test complete.")
 
     def _on_reasoning_failed(self, error: str) -> None:
         self.act_generate.setEnabled(True)
         self._update_reasoning_enabled()
+        self._update_refine_enabled()
         QMessageBox.critical(self, "Reasoning test failed", error)
         self._set_status("Reasoning test failed")
+
+    def _refine(self) -> None:
+        if not self._model:
+            QMessageBox.information(self, "Refine", "Load a model first.")
+            return
+        views = self.input_panel.get_views() or []
+        code = self.code_panel.get_predicted().strip()
+        if not code:
+            QMessageBox.information(self, "Refine", "Generate or enter predicted code first.")
+            return
+        if self._refine_worker and self._refine_worker.isRunning():
+            return
+        if self._generate_worker and self._generate_worker.isRunning():
+            return
+
+        self._refine_input_code = code
+        self.act_generate.setEnabled(False)
+        self.act_reasoning_test.setEnabled(False)
+        self.act_refine.setEnabled(False)
+        self._set_status("Refining…")
+
+        self._refine_worker = RefineWorker(
+            self._model,
+            views,
+            code,
+        )
+        self._refine_worker.progress.connect(self._set_status)
+        self._refine_worker.finished_ok.connect(self._on_refine_done)
+        self._refine_worker.failed.connect(self._on_refine_failed)
+        self._refine_worker.start()
+
+    def _on_refine_done(self, raw_output: str, mode: str) -> None:
+        result = parse_refine_output(raw_output, mode=mode)
+        code = result.code.strip()
+        if not code:
+            code = extract_refine_code(raw_output, mode=mode).strip()
+
+        display = format_refine_display(result)
+        if display:
+            self.code_panel.set_reasoning(display)
+        elif mode == "fix" and raw_output.strip():
+            self.code_panel.set_reasoning(raw_output.strip())
+        else:
+            reasoning = extract_reasoning(raw_output)
+            if reasoning:
+                self.code_panel.set_reasoning(reasoning)
+            else:
+                self.code_panel.set_reasoning(raw_output.strip())
+
+        if code and looks_like_cadquery_code(code):
+            self.code_panel.set_predicted(code)
+            self.act_execute.setEnabled(True)
+
+        truncated = refine_code_is_truncated(raw_output, code)
+
+        self.act_generate.setEnabled(True)
+        self._update_reasoning_enabled()
+        self._update_refine_enabled()
+
+        if result.score is not None:
+            status = f"Refine complete — score {result.score}%."
+            if (
+                result.score < 100
+                and code
+                and refine_code_unchanged(self._refine_input_code, code)
+            ):
+                status += " Warning: returned script is unchanged."
+            elif result.score < 100 and not code:
+                status += " Warning: no corrected script found in response."
+            elif truncated:
+                status += " Warning: script may be truncated."
+            self._set_status(status)
+        elif code:
+            status = "Refine complete — script updated."
+            if refine_code_unchanged(self._refine_input_code, code):
+                status += " Warning: returned script is unchanged."
+            elif truncated:
+                status += " Warning: script may be truncated."
+            self._set_status(status)
+        else:
+            self._set_status(
+                "Refine complete — no corrected script found in model response."
+            )
+
+        if self._model is None:
+            return
+
+        history_code = code or self.code_panel.get_predicted()
+        if not history_code:
+            return
+
+        views = self.input_panel.get_views()
+        source = f"refine:{mode}:{self._current_uuid or 'custom'}"
+        rec = new_run_record(
+            model_id=self._model.entry.id,
+            model_label=self._model.entry.label,
+            source=source,
+            code=history_code,
+            views=views or [],
+        )
+        self._current_run_id = rec.run_id
+        self.run_history.add_run(rec)
+
+    def _on_refine_failed(self, error: str) -> None:
+        self.act_generate.setEnabled(True)
+        self._update_reasoning_enabled()
+        self._update_refine_enabled()
+        QMessageBox.critical(self, "Refine failed", error)
+        self._set_status("Refine failed")
 
     def _execute_predicted(self) -> None:
         code = self.code_panel.get_predicted()

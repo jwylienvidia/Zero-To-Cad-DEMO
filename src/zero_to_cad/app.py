@@ -20,6 +20,13 @@ def _configure_vtk_qt() -> None:
 
 def main() -> None:
     os.environ.setdefault("QT_API", "pyside6")
+
+    # Load saved API keys / endpoints into the environment before any config
+    # (or backend) reads them. Environment values still take precedence.
+    from zero_to_cad.settings import apply_settings_to_env
+
+    apply_settings_to_env()
+
     _configure_vtk_qt()
 
     from PySide6.QtCore import Qt

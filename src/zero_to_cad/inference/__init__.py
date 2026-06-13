@@ -36,6 +36,10 @@ def load_model(entry: "ModelEntry") -> InferenceModel:
         from zero_to_cad.inference.anthropic_model import ClaudeModel
 
         return ClaudeModel(entry)
+    if entry.backend == "gemini":
+        from zero_to_cad.inference.gemini_model import GeminiModel
+
+        return GeminiModel(entry)
     if entry.backend == "openai":
         from zero_to_cad.inference.remote_vllm_model import RemoteVLLMModel
 

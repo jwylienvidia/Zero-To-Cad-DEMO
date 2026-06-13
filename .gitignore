@@ -21,6 +21,7 @@ env/
 .env
 .env.*
 *.pem
+settings.json
 
 # Test / type / lint caches
 .pytest_cache/

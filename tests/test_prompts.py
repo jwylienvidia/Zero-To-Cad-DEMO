@@ -14,8 +14,18 @@ from zero_to_cad.inference.prompts import (
     build_doc_augmented_system_prompt,
     build_messages,
     build_reasoning_test_user_text,
+    build_refine_fix_user_text,
+    build_refine_user_text,
     extract_cadquery_code,
     extract_reasoning,
+    extract_refine_code,
+    format_execution_error,
+    format_refine_display,
+    looks_like_cadquery_code,
+    parse_refine_output,
+    prepare_refine_images,
+    refine_code_is_truncated,
+    refine_code_unchanged,
 )
 
 
@@ -128,3 +138,183 @@ def test_extract_reasoning_before_answer() -> None:
 def test_extract_reasoning_plain_code_is_empty() -> None:
     assert extract_reasoning("import cadquery as cq\nresult = cq.Workplane()") == ""
     assert extract_reasoning("") == ""
+
+
+def test_extract_cadquery_code_prefers_last_fence() -> None:
+    text = (
+        "Broken script:\n```python\nresult = broken(\n```\n"
+        "Fixed script:\n```python\nimport cadquery as cq\nresult = cq.Workplane().box(1, 1, 1)\n```"
+    )
+    assert "broken(" in extract_cadquery_code(text)
+    assert extract_cadquery_code(text, prefer_last=True) == (
+        "import cadquery as cq\nresult = cq.Workplane().box(1, 1, 1)"
+    )
+
+
+def test_extract_refine_code_rejects_diagnosis_prose() -> None:
+    text = (
+        "### Diagnosis\n\n"
+        "The script fails with a `StdFail_NotDone` error during `.chamfer()`.\n"
+        "The selector `.faces(\">Z\")` selects the entire top face."
+    )
+    assert extract_refine_code(text, mode="fix") == ""
+    assert looks_like_cadquery_code(text) is False
+
+
+def test_extract_refine_code_uses_answer_fence_not_full_response() -> None:
+    text = (
+        "<score_reasoning>\nThe hex shape is correct.\n</score_reasoning>\n"
+        "Score: 25%\n"
+        "<answer>\n"
+        "```python\n"
+        "import cadquery as cq\n"
+        "result = cq.Workplane('XY').box(1, 1, 1)\n"
+        ".rect(bottom"
+    )
+    code = extract_refine_code(text, mode="visual")
+    assert code.startswith("import cadquery as cq")
+    assert "<score_reasoning>" not in code
+    assert "Score: 25%" not in code
+    assert code.endswith(".rect(bottom")
+    assert refine_code_is_truncated(text, code) is True
+
+
+def test_refine_fix_system_prompt_includes_cadquery_reference() -> None:
+    from zero_to_cad.inference.prompts import REFINE_FIX_SYSTEM_PROMPT
+
+    assert CADQUERY_REFERENCE in REFINE_FIX_SYSTEM_PROMPT
+    assert "condensed CadQuery reference" in REFINE_FIX_SYSTEM_PROMPT
+
+
+def test_extract_refine_code_fix_mode_ignores_perfect_score() -> None:
+    text = (
+        "Score: 100%\n"
+        "```python\nimport cadquery as cq\nresult = cq.Workplane().box(2, 2, 2)\n```"
+    )
+    assert extract_refine_code(text, mode="visual") == ""
+    assert extract_refine_code(text, mode="fix") == (
+        "import cadquery as cq\nresult = cq.Workplane().box(2, 2, 2)"
+    )
+
+
+def test_parse_refine_output_fix_mode_with_score() -> None:
+    text = (
+        "Diagnosis: missing parenthesis.\n"
+        "Score: 100%\n"
+        "```python\nimport cadquery as cq\nresult = cq.Workplane().box(1, 1, 1)\n```"
+    )
+    visual = parse_refine_output(text, mode="visual")
+    fix = parse_refine_output(text, mode="fix")
+    assert visual.code == ""
+    assert fix.code == "import cadquery as cq\nresult = cq.Workplane().box(1, 1, 1)"
+
+
+def test_prepare_refine_images_caps_at_num_views() -> None:
+    targets = [Image.new("RGB", (8, 8)) for _ in range(8)]
+    renders = [Image.new("RGB", (8, 8)) for _ in range(4)]
+    sel_targets, sel_renders = prepare_refine_images(targets, renders)
+    assert len(sel_targets) == 4
+    assert len(sel_renders) == 4
+    assert len(sel_targets) + len(sel_renders) == 8
+
+
+def test_build_refine_fix_user_text_includes_code_and_error() -> None:
+    prompt = build_refine_fix_user_text(
+        "import cadquery as cq\nresult = cq.Workplane().box(1, 1",
+        "SyntaxError: unexpected EOF while parsing",
+    )
+    assert "failed to execute" in prompt
+    assert "result = cq.Workplane().box(1, 1" in prompt
+    assert "SyntaxError: unexpected EOF while parsing" in prompt
+    assert "define a variable `result`" in prompt
+    assert "```python" in prompt
+
+
+def test_format_execution_error() -> None:
+    assert format_execution_error("boom", "Traceback...") == "boom\n\nTraceback..."
+    assert format_execution_error("boom", None) == "boom"
+
+
+def test_parse_refine_output_fix_response_extracts_code() -> None:
+    text = (
+        "<think>\nMissing closing parenthesis.\n</think>\n"
+        "<answer>\n```python\nimport cadquery as cq\nresult = cq.Workplane().box(1, 1, 1)\n```\n</answer>"
+    )
+    result = parse_refine_output(text, mode="fix")
+    assert result.score_reasoning == ""
+    assert result.critique == ""
+    assert result.score is None
+    assert result.code == "import cadquery as cq\nresult = cq.Workplane().box(1, 1, 1)"
+
+
+def test_build_refine_user_text_includes_counts_and_code() -> None:
+    prompt = build_refine_user_text(
+        'import cadquery as cq\nresult = cq.Workplane("XY").box(1, 2, 3)',
+        num_target=8,
+        num_render=4,
+    )
+    assert "8 reference views" in prompt
+    assert "4 rendered views" in prompt
+    assert "score_reasoning" in prompt
+    assert 'result = cq.Workplane("XY").box(1, 2, 3)' in prompt
+
+
+def test_parse_refine_output_full() -> None:
+    text = (
+        "<score_reasoning>\nBase width is too large vs target.\n</score_reasoning>\n"
+        "<critique>\nThe base is too wide.\n</critique>\n"
+        "Score: 80%\n"
+        "<change_reasoning>\nNarrowing the box width should match the target profile.\n"
+        "</change_reasoning>\n"
+        "<suggestions>\nReduce the box width.\n</suggestions>\n"
+        "<answer>\n```python\nimport cadquery as cq\nresult = cq.Workplane().box(1, 1, 1)\n```\n</answer>"
+    )
+    result = parse_refine_output(text)
+    assert result.score_reasoning == "Base width is too large vs target."
+    assert result.critique == "The base is too wide."
+    assert result.score == 80
+    assert "Narrowing the box width" in result.change_reasoning
+    assert result.suggestions == "Reduce the box width."
+    assert result.code == "import cadquery as cq\nresult = cq.Workplane().box(1, 1, 1)"
+
+
+def test_parse_refine_output_perfect_score_no_code() -> None:
+    text = (
+        "<score_reasoning>\nAll dimensions and features match.\n</score_reasoning>\n"
+        "<critique>\nPerfect match.\n</critique>\n"
+        "Score: 100%\n"
+    )
+    result = parse_refine_output(text)
+    assert result.score_reasoning == "All dimensions and features match."
+    assert result.critique == "Perfect match."
+    assert result.score == 100
+    assert result.change_reasoning == ""
+    assert result.suggestions == ""
+    assert result.code == ""
+
+
+def test_format_refine_display() -> None:
+    from zero_to_cad.inference.prompts import RefineResult
+
+    display = format_refine_display(
+        RefineResult(
+            score_reasoning="Most features align.",
+            critique="Close match.",
+            score=92,
+            change_reasoning="Fillet radius is slightly off.",
+            suggestions="Tweak fillet radius.",
+            code="",
+        )
+    )
+    assert "Most features align." in display
+    assert "Score: 92%" in display
+    assert "Fillet radius is slightly off." in display
+    assert "Tweak fillet radius." in display
+
+
+def test_refine_code_unchanged() -> None:
+    code = "import cadquery as cq\nresult = cq.Workplane().box(1, 1, 1)"
+    assert refine_code_unchanged(code, code) is True
+    assert refine_code_unchanged(code, code + "\n") is True
+    assert refine_code_unchanged(code, code.replace("1, 1, 1", "2, 2, 2")) is False
+    assert refine_code_unchanged("", "") is False
