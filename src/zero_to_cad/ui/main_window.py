@@ -26,8 +26,12 @@ from zero_to_cad.dataset.parquet_store import ParquetStore
 from zero_to_cad.execute.drop_test import DropTestParams, build_drop_test_code
 from zero_to_cad.execute.sandbox import ExecutionResult
 from zero_to_cad.export.asset import save_asset
-from zero_to_cad.inference.model import CadModel
-from zero_to_cad.inference.prompts import build_reasoning_test_user_text
+from zero_to_cad.inference import InferenceModel
+from zero_to_cad.inference.prompts import (
+    build_reasoning_test_user_text,
+    extract_cadquery_code,
+    extract_reasoning,
+)
 from zero_to_cad.ui.code_panel import CodePanel
 from zero_to_cad.ui.dataset_browser import DatasetBrowser
 from zero_to_cad.ui.input_panel import InputPanel
@@ -48,7 +52,7 @@ class MainWindow(QMainWindow):
         self.resize(1600, 900)
 
         self._store = ParquetStore()
-        self._model: CadModel | None = None
+        self._model: InferenceModel | None = None
         self._current_uuid: str | None = None
         self._gt_stl_bytes: bytes | None = None
         self._current_ground_truth_code: str = ""
@@ -202,6 +206,11 @@ class MainWindow(QMainWindow):
         except Exception:
             return False
 
+    def _anthropic_key_present(self) -> bool:
+        import os
+
+        return bool(os.environ.get("ANTHROPIC_API_KEY"))
+
     def _set_status(self, message: str) -> None:
         self.statusBar().showMessage(message)
 
@@ -276,7 +285,14 @@ class MainWindow(QMainWindow):
             return
 
         entry = self._selected_model_entry()
-        if entry.gated and not self._hf_token_present():
+        if entry.backend == "anthropic" and not self._anthropic_key_present():
+            QMessageBox.warning(
+                self,
+                "Anthropic API key missing",
+                f"{entry.label} requires the ANTHROPIC_API_KEY environment variable.\n\n"
+                f"{entry.notes}",
+            )
+        elif entry.backend == "vllm" and entry.gated and not self._hf_token_present():
             QMessageBox.warning(
                 self,
                 "Gated model",
@@ -300,7 +316,7 @@ class MainWindow(QMainWindow):
         self._model_worker.failed.connect(self._on_model_failed)
         self._model_worker.start()
 
-    def _on_model_loaded(self, model: CadModel) -> None:
+    def _on_model_loaded(self, model: InferenceModel) -> None:
         self._model = model
         self.act_load_model.setEnabled(True)
         self._set_status(f"Model loaded: {model.entry.label}")
@@ -346,7 +362,14 @@ class MainWindow(QMainWindow):
         self._generate_worker.failed.connect(self._on_generate_failed)
         self._generate_worker.start()
 
-    def _on_generate_done(self, code: str) -> None:
+    def _on_generate_done(self, raw_output: str) -> None:
+        reasoning = extract_reasoning(raw_output)
+        code = extract_cadquery_code(raw_output)
+        if reasoning:
+            self.code_panel.set_reasoning(reasoning)
+        else:
+            self.code_panel.clear_reasoning()
+        # set_predicted last so the Predicted tab stays focused after generation.
         self.code_panel.set_predicted(code)
         self.act_execute.setEnabled(bool(code.strip()))
         self.act_generate.setEnabled(True)

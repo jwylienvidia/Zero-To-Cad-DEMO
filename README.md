@@ -16,9 +16,10 @@ Desktop application for running [ADSKAILab/Zero-To-CAD-Qwen3-VL-2B](https://hugg
 ## Requirements
 
 - Linux (tested on Ubuntu 24.04)
-- NVIDIA GPU with CUDA 12.x (RTX 5090 / Blackwell needs PyTorch `cu128` wheels)
-- ~8 GB disk for test parquet + ~4 GB for model weights (Hugging Face cache)
+- NVIDIA GPU with CUDA 12.x for the local (vLLM) models
+- ~8 GB disk for test parquet + model weights (Hugging Face cache)
 - Python 3.12 (CadQuery wheels do not support 3.13+)
+- `ANTHROPIC_API_KEY` only if you use the Claude Fable model
 
 ## Install
 
@@ -32,8 +33,30 @@ Or install into an existing Python 3.12 environment:
 
 ```bash
 pip install -e ".[dev]"
-# PyTorch with CUDA 12.8 (Blackwell / RTX 50-series):
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+```
+
+### vLLM (local inference)
+
+Local models run on an **in-process vLLM engine** (no separate server). `vllm`
+pulls a compatible `torch` build and is GPU/CUDA-specific, so install it into the
+conda env after creating it:
+
+```bash
+conda activate zero-to-cad
+pip install vllm
+```
+
+`environment.yml` and `pyproject.toml` already list `vllm`, but if it was skipped
+(or you need a CUDA-specific build), the command above adds it to the env. Tuning
+is env-overridable: `VLLM_MAX_MODEL_LEN` (default `8192`) and
+`VLLM_GPU_MEMORY_UTILIZATION` (default `0.9`).
+
+### Claude Fable (API)
+
+The Claude Fable model is a cloud API call — no local weights. Set your key:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 ## Run
@@ -54,20 +77,38 @@ zero-to-cad
 
 The toolbar combo box lists every model in the hardcoded registry ([`src/zero_to_cad/config.py`](src/zero_to_cad/config.py)):
 
-| Model | Notes |
-|-------|-------|
-| **Zero-To-CAD 2B** | CadQuery fine-tune; ~4 GB download; fits most CUDA GPUs |
-| **Cosmos-Reason2 8B** | Qwen3-VL baseline (not CAD-trained); gated; ~32 GB GPU memory |
-| **Cosmos-Reason2 8B + CadQuery docs** | Same baseline with condensed CadQuery API reference in the system prompt; gated; ~32 GB GPU memory |
+| Model | Backend | Notes |
+|-------|---------|-------|
+| **Zero-To-CAD 2B (CadQuery fine-tune)** | vLLM | CadQuery fine-tune; fits most CUDA GPUs |
+| **Cosmos-Reason2 8B + CadQuery docs** | vLLM | Baseline with condensed CadQuery API reference in the system prompt; gated; ~32 GB GPU memory |
+| **Cosmos3 8B (Zero-To-CAD reasoning fine-tune)** | vLLM | Local reasoning fine-tune; override path with `COSMOS3_MODEL` |
+| **Cosmos3-Nano + CadQuery docs** | Remote vLLM (OpenAI API) | `cosmos3_omni` architecture that stock in-process vLLM can't load; served by a separate Cosmos3-capable vLLM server. Set `COSMOS3_NANO_BASE_URL`. |
+| **Claude Fable 5** | Anthropic API | Cloud model; needs `ANTHROPIC_API_KEY`; override id with `CLAUDE_FABLE_MODEL` |
 
 Only one model is loaded at a time. Selecting a different entry and clicking *Load model* releases the previous weights from VRAM before loading the new one.
 
-**Cosmos-Reason2-8B** requires Hugging Face authentication:
+Gated baselines (Cosmos-Reason2-8B, Cosmos3-Nano) require Hugging Face authentication:
 
-1. Accept the model gate at [nvidia/Cosmos-Reason2-8B](https://huggingface.co/nvidia/Cosmos-Reason2-8B)
+1. Accept the model gate (e.g. [nvidia/Cosmos-Reason2-8B](https://huggingface.co/nvidia/Cosmos-Reason2-8B))
 2. Run `huggingface-cli login`
 
-Each model uses its own system/user prompt (also defined in `config.MODELS`). To add a new fine-tune, append another `ModelEntry` to that list with the HF repo id, label, and prompts.
+The Claude Fable model is an API call — set `ANTHROPIC_API_KEY` in your environment before loading it.
+
+**Cosmos3-Nano** uses NVIDIA's `cosmos3_omni` architecture, which stock in-process vLLM cannot load. Run it on a separate Cosmos3-capable vLLM server and point the app at it. For example:
+
+```bash
+docker run --runtime nvidia --gpus all \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  -p 8000:8000 --ipc=host \
+  vllm/vllm-omni:cosmos3 \
+  vllm serve nvidia/Cosmos3-Nano \
+  --hf-overrides '{"architectures": ["Cosmos3ReasonerForConditionalGeneration"]}' \
+  --allowed-local-media-path / --port 8000 --init-timeout 1800
+```
+
+Then set `COSMOS3_NANO_BASE_URL` (default `http://localhost:8000/v1`) before launching the app. "Load model" verifies the server is reachable.
+
+Each model uses its own system/user prompt and `backend` (also defined in `config.MODELS`). To add another model, append a `ModelEntry` with its id, label, prompts, and backend (`vllm` or `anthropic`).
 
 ### Run history
 
@@ -93,7 +134,7 @@ Every *Generate* run is logged on the **History** tab (next to Predicted / Groun
 ```
 src/zero_to_cad/
   dataset/     # parquet download + lazy index
-  inference/   # Qwen3-VL wrapper
+  inference/   # vLLM + Anthropic backends, factory, prompts
   execute/     # CadQuery subprocess sandbox
   ui/          # PySide6 GUI
 tests/
@@ -111,11 +152,7 @@ CadQuery execution test is skipped if `cadquery` is not importable. Parquet test
 
 ### RTX 5090 / Blackwell (sm_120)
 
-Use PyTorch built for CUDA 12.8:
-
-```bash
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-```
+The vLLM backend sets `VLLM_USE_FLASHINFER_SAMPLER=0` automatically, since the flashinfer sampler's JIT arch probe fails on Blackwell (sm_120) GPUs; vLLM falls back to the native Torch sampler. Make sure your installed `vllm`/`torch` build targets your CUDA version.
 
 ### 3D viewports (desktop artifacts / blank panels)
 
@@ -134,9 +171,9 @@ If the VTK backend still shows artifacts:
 - On Linux over SSH, use `ssh -X` or run on the local workstation console.
 - STEP meshes are tessellated through CadQuery automatically.
 
-### Transformers version
+### Local inference (vLLM)
 
-This project pins `transformers>=4.57,<5`. The model card notes that `image-to-text` pipelines changed in v5; we load `Qwen3VLForConditionalGeneration` directly.
+Local models load through an in-process `vllm.LLM` engine with `trust_remote_code=True` (required for the Cosmos3-Nano `cosmos3_omni` architecture). Switching models releases the engine and frees GPU memory before the next one loads.
 
 ### Generated code imports
 

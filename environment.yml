@@ -14,11 +14,8 @@ dependencies:
   - pytest
   - pip
   - pip:
-      - --extra-index-url https://download.pytorch.org/whl/cu128
-      - torch
-      - torchvision
-      - transformers>=4.57,<5
-      - accelerate
+      - vllm>=0.6
+      - anthropic>=0.40
+      - openai>=1.40
       - huggingface_hub
-      - safetensors
       - -e .

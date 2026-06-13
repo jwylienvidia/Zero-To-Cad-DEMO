@@ -6,6 +6,7 @@ from PIL import Image
 
 from zero_to_cad.inference.cadquery_reference import CADQUERY_REFERENCE
 from zero_to_cad.inference.prompts import (
+    CADQUERY_DOCS_SYSTEM_PROMPT,
     COSMOS_DOCS_SYSTEM_PROMPT,
     COSMOS_REASON_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
@@ -13,6 +14,8 @@ from zero_to_cad.inference.prompts import (
     build_doc_augmented_system_prompt,
     build_messages,
     build_reasoning_test_user_text,
+    extract_cadquery_code,
+    extract_reasoning,
 )
 
 
@@ -74,3 +77,54 @@ def test_build_messages_with_docs_system_prompt() -> None:
     messages = build_messages(views, system_prompt=COSMOS_DOCS_SYSTEM_PROMPT)
     assert CADQUERY_REFERENCE in messages[0]["content"]
     assert COSMOS_REASON_SYSTEM_PROMPT in messages[0]["content"]
+
+
+def test_cadquery_docs_system_prompt_includes_reference() -> None:
+    assert CADQUERY_DOCS_SYSTEM_PROMPT.startswith(SYSTEM_PROMPT)
+    assert CADQUERY_REFERENCE in CADQUERY_DOCS_SYSTEM_PROMPT
+    assert COSMOS_REASON_SYSTEM_PROMPT not in CADQUERY_DOCS_SYSTEM_PROMPT
+
+
+def test_extract_cadquery_code_plain_passthrough() -> None:
+    code = 'import cadquery as cq\nresult = cq.Workplane("XY").box(1, 2, 3)'
+    assert extract_cadquery_code(code) == code
+
+
+def test_extract_cadquery_code_strips_fences() -> None:
+    text = "Here is the script:\n```python\nimport cadquery as cq\nresult = cq.Workplane().box(1, 1, 1)\n```\n"
+    extracted = extract_cadquery_code(text)
+    assert extracted == "import cadquery as cq\nresult = cq.Workplane().box(1, 1, 1)"
+
+
+def test_extract_cadquery_code_from_answer_block() -> None:
+    text = (
+        "<think>\nFirst make a base box.\n</think>\n"
+        "<answer>\n```python\nimport cadquery as cq\nresult = cq.Workplane().box(2, 2, 2)\n```\n</answer>"
+    )
+    extracted = extract_cadquery_code(text)
+    assert extracted == "import cadquery as cq\nresult = cq.Workplane().box(2, 2, 2)"
+    assert "<think>" not in extracted
+
+
+def test_extract_cadquery_code_empty() -> None:
+    assert extract_cadquery_code("") == ""
+
+
+def test_extract_reasoning_from_think_block() -> None:
+    text = (
+        "<think>\nIdentify the base box, then cut a hole.\n</think>\n"
+        "<answer>\n```python\nresult = 1\n```\n</answer>"
+    )
+    reasoning = extract_reasoning(text)
+    assert reasoning == "Identify the base box, then cut a hole."
+    assert "result = 1" not in reasoning
+
+
+def test_extract_reasoning_before_answer() -> None:
+    text = "First build the base.\n<answer>\nresult = 1\n</answer>"
+    assert extract_reasoning(text) == "First build the base."
+
+
+def test_extract_reasoning_plain_code_is_empty() -> None:
+    assert extract_reasoning("import cadquery as cq\nresult = cq.Workplane()") == ""
+    assert extract_reasoning("") == ""

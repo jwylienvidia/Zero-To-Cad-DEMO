@@ -10,7 +10,7 @@ from PySide6.QtCore import QThread, Signal
 from zero_to_cad.dataset.downloader import download_test_split
 from zero_to_cad.execute.sandbox import ExecutionResult, execute_cadquery
 from zero_to_cad.config import ModelEntry
-from zero_to_cad.inference.model import CadModel
+from zero_to_cad.inference import InferenceModel, load_model
 
 
 class DownloadWorker(QThread):
@@ -45,7 +45,7 @@ class LoadModelWorker(QThread):
             self.progress.emit(
                 f"Loading {self.entry.label} (first run downloads weights)…"
             )
-            model = CadModel(entry=self.entry)
+            model = load_model(self.entry)
             self.finished_ok.emit(model)
         except Exception as e:
             self.failed.emit(str(e))
@@ -58,7 +58,7 @@ class GenerateWorker(QThread):
 
     def __init__(
         self,
-        model: CadModel,
+        model: InferenceModel,
         views: list[Image.Image],
         *,
         user_text: str | None = None,

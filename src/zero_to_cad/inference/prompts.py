@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from PIL import Image
 
 from zero_to_cad.inference.cadquery_reference import CADQUERY_REFERENCE
@@ -32,6 +34,56 @@ def build_doc_augmented_system_prompt(base_system_prompt: str) -> str:
 
 
 COSMOS_DOCS_SYSTEM_PROMPT = build_doc_augmented_system_prompt(COSMOS_REASON_SYSTEM_PROMPT)
+
+# Docs-augmented prompt without the <think>/<answer> wrapper (used for the Claude API model).
+CADQUERY_DOCS_SYSTEM_PROMPT = build_doc_augmented_system_prompt(SYSTEM_PROMPT)
+
+
+_ANSWER_RE = re.compile(r"<answer>\s*(.*?)\s*</answer>", re.DOTALL | re.IGNORECASE)
+_FENCE_RE = re.compile(r"```(?:python|py)?\s*\n?(.*?)```", re.DOTALL | re.IGNORECASE)
+_THINK_RE = re.compile(r"<think>\s*(.*?)\s*</think>", re.DOTALL | re.IGNORECASE)
+
+
+def extract_cadquery_code(text: str) -> str:
+    """Pull executable CadQuery code out of a model response.
+
+    Handles reasoning-style ``<answer>...</answer>`` blocks and Markdown code
+    fences. Falls back to the original text (stripped) when neither is present,
+    so plain code passes through unchanged.
+    """
+    if not text:
+        return ""
+
+    answer_match = _ANSWER_RE.search(text)
+    if answer_match:
+        text = answer_match.group(1)
+
+    fence_match = _FENCE_RE.search(text)
+    if fence_match:
+        return fence_match.group(1).strip()
+
+    return text.strip()
+
+
+def extract_reasoning(text: str) -> str:
+    """Return the model's reasoning trace, if any.
+
+    Prefers an explicit ``<think>...</think>`` block; otherwise returns any text
+    that precedes an ``<answer>`` block. Returns an empty string when the output
+    is plain code (no reasoning to show).
+    """
+    if not text:
+        return ""
+
+    think_match = _THINK_RE.search(text)
+    if think_match:
+        return think_match.group(1).strip()
+
+    answer_match = _ANSWER_RE.search(text)
+    if answer_match:
+        return text[: answer_match.start()].strip()
+
+    return ""
 
 REASONING_TEST_USER_TEMPLATE = """\
 You are given 8 rendered views of a CAD object and its ground-truth CadQuery script.
